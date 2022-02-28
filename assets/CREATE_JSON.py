@@ -1,7 +1,7 @@
 from os import listdir
 from os.path import isfile, join
 import json
-folders = ["tile", "objects", "layer", "frontLayer", "background"]
+folders = ["tile", "objects", "layer", "background"]
 
 for a in folders:
     onlyfiles = [f for f in listdir(a) if isfile(join(a, f))]
