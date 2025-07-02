@@ -1,13 +1,249 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>Ravnica</title>
-    <link rel="icon" href="./favicon.ico?" />
-    <link rel="shortcut icon" href="./favicon.ico?" type="image/x-icon" />
-    <link rel="icon" href="./favicon.ico?" type="image/x-icon" />
-    <script src="game.js"></script>
-  </head>
-  <body>
-  </body>
+<html lang="fr">
+
+<head>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard MM - QLD</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #121212;
+            color: #eee;
+            padding: 2rem;
+        }
+
+        .card {
+            background: #1f1f1f;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4);
+            display: flex;
+        }
+
+        .canvas-container {
+            width: 900px;
+            height: 450px;
+            margin: auto;
+        }
+
+        .buy-sell-container {
+            margin: auto;
+        }
+
+        #refresh {
+            background: #333;
+            color: #eee;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>📊 Signaux MM - QLD</h1>
+    <form id="customStrategyForm" style="margin-bottom: 2rem;">
+        <label>
+            MM courte :
+            <input type="number" id="shortWindow" value="10" min="1" required />
+        </label>
+        <label style="margin-left: 1rem;">
+            MM longue :
+            <input type="number" id="longWindow" value="50" min="2" required />
+        </label>
+        <button type="submit">➕ Ajouter stratégie personnalisée</button>
+    </form>
+
+    <div id="lastUpdate" style="margin-bottom: 1rem;"></div>
+    <button id="refresh">🔄 Rafraîchir les données</button>
+    <div id="results"></div>
+
+    <script>
+        const API_KEY = "0742f3dc28d0406abc93fda5c9a29733";
+        const TICKER = "QLD";
+        const STRATEGIES = {
+            "GOLDEN_CROSS": [50, 200]
+        };
+
+        document.getElementById("customStrategyForm").addEventListener("submit", (e) => {
+            e.preventDefault();
+            const shortWin = parseInt(document.getElementById("shortWindow").value);
+            const longWin = parseInt(document.getElementById("longWindow").value);
+            const name = `Custom_MM${shortWin}_${longWin}`;
+            STRATEGIES[name] = [shortWin, longWin];
+            analyzeStrategies();
+        });
+
+        async function fetchData() {
+            const url = `https://api.twelvedata.com/time_series?symbol=${TICKER}&interval=1day&outputsize=2000&apikey=${API_KEY}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            return data.values.map(d => ({
+                date: d.datetime,
+                close: parseFloat(d.close),
+            })).reverse();
+        }
+
+        function calculateSMA(data, window) {
+            return data.map((_, i, arr) => {
+                if (i < window - 1) return null;
+                const slice = arr.slice(i - window + 1, i + 1);
+                const avg = slice.reduce((sum, val) => sum + val.close, 0) / window;
+                return avg;
+            });
+        }
+
+        function drawChart(data, shortSMA, longSMA, shortWin, longWin, strategyName) {
+            const ctx = document.getElementById(strategyName).getContext("2d");
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.map(d => d.date),
+                    datasets: [
+                        {
+                            label: 'Prix',
+                            data: data.map(d => d.close),
+                            borderColor: '#eee',
+                            fill: false
+                        },
+                        {
+                            label: `SMA ${shortWin}`,
+                            data: shortSMA,
+                            borderColor: '#4CAF50',
+                            fill: false
+                        },
+                        {
+                            label: `SMA ${longWin}`,
+                            data: longSMA,
+                            borderColor: '#F44336',
+                            fill: false
+                        }
+                    ]
+                },
+                options: {
+                    scales: {
+                        x: { display: false },
+                        y: { beginAtZero: false }
+                    }
+                }
+            });
+        }
+
+        const TRADE_AMOUNT = 1000;
+
+        async function analyzeStrategies() {
+            const data = await fetchData();
+            const lastDate = data[data.length - 1].date;
+            document.getElementById("lastUpdate").textContent = `Dernière mise à jour : ${lastDate}`;
+            const resultsContainer = document.getElementById("results");
+            resultsContainer.innerHTML = "";
+
+            for (const [strategyName, [shortWin, longWin]] of Object.entries(STRATEGIES)) {
+                const shortSMA = calculateSMA(data, shortWin);
+                const longSMA = calculateSMA(data, longWin);
+
+                let lastBuy = 0;
+                let firstBuyDate = null;
+                let history = [];
+                let perYear = {};
+                let capital = TRADE_AMOUNT;
+                let invested = TRADE_AMOUNT;
+                let shares = 0;
+                let position = false;
+                let nbTrades = 0;
+
+                for (let i = longWin; i < data.length; i++) {
+                    const price = data[i].close;
+                    const ms_y = shortSMA[i - 1];
+                    const ml_y = longSMA[i - 1];
+                    const ms_t = shortSMA[i];
+                    const ml_t = longSMA[i];
+
+                    if (!position && ms_y < ml_y && ms_t > ml_t) {
+                        position = true;
+                        shares = capital / price;
+                        history.push({ date: data[i].date, action: 'ACHAT', price });
+                        lastBuy = price;
+                    }
+
+                    if (position && ms_y > ml_y && ms_t < ml_t) {
+                        position = false;
+                        capital = shares * price; // mise à jour du capital avec la vente
+                        nbTrades++;
+                        history.push({ date: data[i].date, action: 'VENTE', price });
+                        shares = 0;
+                    }
+                }
+
+                // à la fin, valeur actuelle
+                let value = position ? shares * data[data.length - 1].close : capital;
+                let gain = value - invested;
+
+
+                const last = data[data.length - 1];
+                if (position) {
+                    value = shares * last.close;
+                }
+
+                const perfPct = invested > 0 ? (gain / invested) * 100 : 0;
+                const perfText = Object.entries(perYear).map(([year, val]) => `${year} : ${val.toFixed(2)} $`).join("<br>");
+                const totalYears = firstBuyDate
+                    ? (new Date(last.date) - new Date(firstBuyDate)) / (365.25 * 24 * 3600 * 1000)
+                    : 0;
+                const annualized = totalYears > 0 ? (((gain + invested) / invested) ** (1 / totalYears) - 1) * 100 : 0;
+
+                let advice = "➡️ Rien à faire aujourd'hui.";
+                const i = data.length - 1;
+                const ms_y = shortSMA[i - 1];
+                const ml_y = longSMA[i - 1];
+                const ms_t = shortSMA[i];
+                const ml_t = longSMA[i];
+                const price = data[i].close;
+                const date = data[i].date;
+
+                if (!position && ms_y < ml_y && ms_t > ml_t) advice = `✅ ACHETER aujourd'hui (${date}) à ${price.toFixed(2)} $`;
+                if (position && ms_y > ml_y && ms_t < ml_t) advice = `🔻 VENDRE aujourd'hui (${date}) à ${price.toFixed(2)} $`;
+
+                const card = document.createElement("div");
+                card.className = `card`;
+                card.innerHTML = `
+                    <div class="buy-sell-container">
+                        <h2>${strategyName}</h2>
+                        <p><strong>Conseil du jour :</strong> ${advice}</p>
+                        <p><strong>MM courte :</strong> ${shortWin} | <strong>MM longue :</strong> ${longWin}</p>
+                        <p><strong>Trades :</strong> ${nbTrades}</p>
+                        <p><strong>Total investi :</strong> ${invested.toFixed(2)} $</p>
+                        <p><strong>Valeur actuelle :</strong> ${(position ? value.toFixed(2) : "-")} $</p>
+                        <p><strong>Performance :</strong> ${gain.toFixed(2)} $ (${perfPct.toFixed(2)}%)</p>
+                        <p><strong>Perf annualisée :</strong> ${annualized.toFixed(2)} %</p>
+                        <p><strong>Performance annuelle :</strong><br>${perfText}</p>
+                        ${position ? `<p><strong>⚠️ Position ouverte :</strong> achat à ${lastBuy.toFixed(2)} $, valeur actuelle ${data[data.length - 1].close.toFixed(2)} $</p>` : ''}
+                        <p><strong>Historique :</strong></p>
+                        <ul>
+                        ${history.map(h => {
+                    const action = h.action === 'ACHAT' ? '⬆️' : '⬇️';
+                    return `<li>${h.date} : ${action} ${h.action} à ${h.price.toFixed(2)} $</li>`;
+                }).join('')}
+                        </ul>
+                    </div>
+                    <div class="canvas-container">
+                        <canvas id="${strategyName}" width="200" height="100"></canvas>
+                    </div>
+                `;
+                resultsContainer.appendChild(card);
+                drawChart(data, shortSMA, longSMA, shortWin, longWin, strategyName);
+            }
+        }
+
+        document.getElementById("refresh").addEventListener("click", analyzeStrategies);
+        analyzeStrategies();
+    </script>
+</body>
+
 </html>
